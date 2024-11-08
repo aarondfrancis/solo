@@ -8,9 +8,12 @@
 namespace AaronFrancis\Solo\Commands;
 
 use AaronFrancis\Solo\Commands\Concerns\ManagesProcess;
+use AaronFrancis\Solo\Console\CustomHotKey;
 use AaronFrancis\Solo\Helpers\AnsiAware;
+use AaronFrancis\Solo\Prompt\Dashboard;
 use Chewie\Concerns\Ticks;
 use Chewie\Contracts\Loopable;
+use Chewie\Input\KeyPressListener;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -32,10 +35,19 @@ class Command implements Loopable
 
     public int $width = 0;
 
+    public ?KeyPressListener $keyPressListener = null;
+
+    /**
+     * @param  string  $name
+     * @param  string  $command
+     * @param  bool  $autostart
+     * @param array<CustomHotKey>  $customHotKeys
+     */
     public function __construct(
         public readonly string $name,
         public readonly string $command,
-        public bool $autostart = true
+        public bool $autostart = true,
+        public array $customHotKeys = [],
     ) {
         $this->clear();
 
@@ -126,8 +138,15 @@ class Command implements Loopable
         $this->addOutput(Str::finish($line, "\n"));
     }
 
-    public function focus(): void
+    public function focus(Dashboard $dashboard): void
     {
+        if(!empty($this->customHotKeys) && !$this->keyPressListener){
+            $this->keyPressListener = KeyPressListener::for($dashboard);
+            foreach($this->customHotKeys as $customKeybinding){
+                $this->keyPressListener->on($customKeybinding->key, fn() => $customKeybinding->execute());
+            }
+        }
+
         $this->focused = true;
 
         $this->gatherLatestOutput();

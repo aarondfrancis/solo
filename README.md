@@ -81,6 +81,7 @@ class SoloServiceProvider extends SoloApplicationServiceProvider
                 EnhancedTailCommand::make('Logs', 'tail -f -n 100 ' . storage_path('logs/laravel.log')),
                 'Vite' => 'npm run dev',
                 // 'HTTP' => 'php artisan serve',
+                new Command(name: 'Foo', command: 'pwd"', autostart: false, customHotKeys: []),
                 'About' => 'php artisan solo:about'
             ])
             // Not auto-started
@@ -121,6 +122,7 @@ Solo::useTheme('dark')
         EnhancedTailCommand::make('Logs', 'tail -f -n 100 ' . storage_path('logs/laravel.log')),
         'Vite' => 'npm run dev',
         // 'HTTP' => 'php artisan serve',
+        new Command(name: 'Foo', command: 'pwd"', autostart: false, customHotKeys: []),
         'About' => 'php artisan solo:about'
     ])
 ```
@@ -128,6 +130,31 @@ Solo::useTheme('dark')
 `EnhancedTailCommand` is a subclass of `Command` with a little bit of logic to make the logs more readable. You're free to create your own subclasses if you want!
 
 To remove a command, simply delete the command. No need to create a PR to fix the stub. We've provided a reasonable set of starting commands, but the `SoloServiceProvider` lives in your application, so you have full control of it.
+
+## Adding custom hotkeys to commands
+
+To add custom hot keys for a command, you can pass an array of `AaronFrancis\Solo\Console\CustomHotKey` instances to the `customHotKeys` parameter of the `Command` constructor.
+
+For example, notice the `CustomHotKey` array here:
+
+```php
+Solo::useTheme('dark')
+    // Commands that auto start.
+    ->addCommands([
+        // ...
+        new Command(name: 'Foo', command: 'echo "See hotkeys below"', autostart: true, customHotKeys: [
+            new CustomHotKey(
+                key: 'e',
+                name: 'echoE',
+                callback: fn() => Log::info('pressed "e"...'),
+                when: fn(Command $command) => $command->processRunning()
+            ),
+            new CustomHotKey(key: 'f', name: 'echoF', callback: fn() => Log::info('pressed "f"...')),
+        ]),
+    ])
+```
+
+The `when` parameter is optional. If provided, the hot key will only be active when the `when` callback returns `true`. This can be useful for hot keys that only make sense when a process is running.
 
 ## Usage
 

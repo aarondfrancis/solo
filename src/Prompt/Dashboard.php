@@ -128,20 +128,36 @@ class Dashboard extends Prompt
 
                 $this->selectedCommand = ($this->selectedCommand - 1 + count($this->commands)) % count($this->commands);
 
-                $this->currentCommand()->focus();
+                $this->currentCommand()->focus($this);
             })
             ->onRight(function () {
                 $this->currentCommand()->blur();
 
                 $this->selectedCommand = ($this->selectedCommand + 1) % count($this->commands);
 
-                $this->currentCommand()->focus();
+                $this->currentCommand()->focus($this);
             })
 
             // Quit
             ->on(['q', Key::CTRL_C], fn() => $this->quit());
 
-        $this->currentCommand()->focus();
+        foreach ($this->commands as $command) {
+            if(empty($command->customHotKeys))
+                continue;
+
+            foreach ($command->customHotKeys as $hotKey) {
+                $listener->on($hotKey->key, function($key) use ($hotKey, $command) {
+                    if($command->focused && $hotKey->isActive($command)){
+                        $hotKey->execute();
+
+                        // color is set manually here, should we move it to a method in the Command class?
+                        $command->addLine("\e[33mExecuted custom hotkey: $key ($hotKey->name)\e[39m");
+                    }
+                });
+            }
+        }
+
+        $this->currentCommand()->focus($this);
 
         $this->loop(function () use ($listener) {
             $this->currentCommand()->catchUpScroll();
@@ -239,3 +255,4 @@ class Dashboard extends Prompt
         return null;
     }
 }
+
