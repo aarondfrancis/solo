@@ -10,8 +10,10 @@ namespace AaronFrancis\Solo\Providers;
 
 use AaronFrancis\Solo\Console\Commands\About;
 use AaronFrancis\Solo\Console\Commands\Install;
+use AaronFrancis\Solo\Console\Commands\Make;
 use AaronFrancis\Solo\Console\Commands\Monitor;
 use AaronFrancis\Solo\Console\Commands\Solo;
+use AaronFrancis\Solo\Console\Commands\Test;
 use AaronFrancis\Solo\Manager;
 use Illuminate\Support\Facades\App;
 use Illuminate\Support\ServiceProvider;
@@ -39,7 +41,9 @@ class SoloServiceProvider extends ServiceProvider
             Monitor::class,
             Solo::class,
             Install::class,
-            About::class
+            About::class,
+            Make::class,
+            Test::class,
         ]);
     }
 

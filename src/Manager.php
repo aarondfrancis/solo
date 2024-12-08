@@ -10,7 +10,10 @@ namespace AaronFrancis\Solo;
 
 use AaronFrancis\Solo\Commands\Command;
 use AaronFrancis\Solo\Commands\UnsafeCommand;
+use AaronFrancis\Solo\Contracts\HotkeyProvider;
 use AaronFrancis\Solo\Contracts\Theme;
+use AaronFrancis\Solo\Hotkeys\DefaultHotkeys;
+use AaronFrancis\Solo\Hotkeys\Hotkey;
 use AaronFrancis\Solo\Prompt\Renderer;
 use AaronFrancis\Solo\Themes\DarkTheme;
 use AaronFrancis\Solo\Themes\LightTheme;
@@ -33,7 +36,7 @@ class Manager
 
     protected string $theme;
 
-    protected ?Theme $cachedTheme;
+    protected ?Theme $cachedTheme = null;
 
     protected string $renderer = Renderer::class;
 
@@ -111,6 +114,22 @@ class Manager
         return $this;
     }
 
+    /**
+     * @return array<Hotkey>
+     *
+     * @throws Exception
+     */
+    public function hotkeys(): array
+    {
+        $hotkeys = Config::get('solo.hotkeys') ?? DefaultHotkeys::class;
+
+        if (!is_a($hotkeys, HotkeyProvider::class, allow_string: true)) {
+            throw new InvalidArgumentException('Hotkeys must implement [' . HotkeyProvider::class . ']');
+        }
+
+        return (new $hotkeys)->keys();
+    }
+
     public function useTheme($key): static
     {
         $this->theme = $key;
@@ -152,6 +171,10 @@ class Manager
 
     public function addCommand(string|Command $command, ?string $name = null): static
     {
+        if (is_string($command) && is_a($command, Command::class, allow_string: true)) {
+            $command = app($command);
+        }
+
         if (is_string($command)) {
             if (is_null($name)) {
                 throw new InvalidArgumentException('Name must be provided when command is a string.');
@@ -172,6 +195,13 @@ class Manager
         }
 
         $this->commands[] = $command;
+
+        return $this;
+    }
+
+    public function clearCommands(): static
+    {
+        $this->commands = [];
 
         return $this;
     }
