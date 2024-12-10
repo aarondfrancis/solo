@@ -120,9 +120,24 @@ class LightTheme implements Theme
         EOT;
     }
 
+    public function boxInteractive(): string
+    {
+        return <<<EOT
+        ╔═╦═╗
+        ╠═╬═╣
+        ║ ║ ║
+        ╚═╩═╝
+EOT;
+    }
+
     public function boxBorder($text): string
     {
         return $this->gray($text);
+    }
+
+    public function boxBorderInteractive($text): string
+    {
+        return $this->bold($this->cyan($text));
     }
 
     public function boxHandle(): string

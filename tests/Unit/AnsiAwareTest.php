@@ -8,7 +8,7 @@
 
 namespace AaronFrancis\Solo\Tests\Unit;
 
-use AaronFrancis\Solo\Helpers\AnsiAware;
+use AaronFrancis\Solo\Support\AnsiAware;
 use Laravel\Prompts\Concerns\Colors;
 use PHPUnit\Framework\Attributes\Test;
 

@@ -6,20 +6,23 @@
  * @link https://twitter.com/aarondfrancis
  */
 
-namespace AaronFrancis\Solo\Helpers;
+namespace AaronFrancis\Solo\Support;
 
 class AnsiAware
 {
     public static function mb_strlen($string): int
     {
+        // Return length of the plain string
+        return mb_strlen(static::plain($string));
+    }
+
+    public static function plain($string): string
+    {
         // Regular expression to match ANSI escape sequences
         $ansiEscapeSequence = '/\x1b\[[0-9;]*[A-Za-z]/';
 
         // Remove ANSI escape sequences
-        $plainString = preg_replace($ansiEscapeSequence, '', $string);
-
-        // Return length of the plain string
-        return mb_strlen($plainString);
+        return preg_replace($ansiEscapeSequence, '', $string);
     }
 
     public static function substr($string, $start, $length = null): string

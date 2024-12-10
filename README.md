@@ -86,6 +86,7 @@ class SoloServiceProvider extends ServiceProvider
                 EnhancedTailCommand::make('Logs', 'tail -f -n 100 ' . storage_path('logs/laravel.log')),
                 'Vite' => 'npm run dev',
                 // 'HTTP' => 'php artisan serve',
+                new Command(name: 'Foo', command: 'pwd"', autostart: false, customHotKeys: []),
                 'About' => 'php artisan solo:about'
             ])
             // Not auto-started
@@ -126,6 +127,7 @@ Solo::useTheme('dark')
         EnhancedTailCommand::make('Logs', 'tail -f -n 100 ' . storage_path('logs/laravel.log')),
         'Vite' => 'npm run dev',
         // 'HTTP' => 'php artisan serve',
+        new Command(name: 'Foo', command: 'pwd"', autostart: false, customHotKeys: []),
         'About' => 'php artisan solo:about'
     ])
 ```
@@ -133,6 +135,31 @@ Solo::useTheme('dark')
 `EnhancedTailCommand` is a subclass of `Command` with a little bit of logic to make the logs more readable. You're free to create your own subclasses if you want!
 
 To remove a command, simply delete the command. No need to create a PR to fix the stub. We've provided a reasonable set of starting commands, but the `SoloServiceProvider` lives in your application, so you have full control of it.
+
+## Adding custom hotkeys to commands
+
+To add custom hot keys for a command, you can pass an array of `AaronFrancis\Solo\Console\CustomHotKey` instances to the `customHotKeys` parameter of the `Command` constructor.
+
+For example, notice the `CustomHotKey` array here:
+
+```php
+Solo::useTheme('dark')
+    // Commands that auto start.
+    ->addCommands([
+        // ...
+        new Command(name: 'Foo', command: 'echo "See hotkeys below"', autostart: true, customHotKeys: [
+            new CustomHotKey(
+                key: 'e',
+                name: 'echoE',
+                callback: fn() => Log::info('pressed "e"...'),
+                when: fn(Command $command) => $command->processRunning()
+            ),
+            new CustomHotKey(key: 'f', name: 'echoF', callback: fn() => Log::info('pressed "f"...')),
+        ]),
+    ])
+```
+
+The `when` parameter is optional. If provided, the hot key will only be active when the `when` callback returns `true`. This can be useful for hot keys that only make sense when a process is running.
 
 ## Usage
 
@@ -209,22 +236,19 @@ If you want to support me you can either buy one of my courses or tell your frie
 - High Performance SQLite: https://highperformancesqlite.com
 - Screencasting: https://screencasting.com
 
-
 ## FAQ
 
-<dl>
-    <dt>My command isn't working</dt>
-    <dd>(That's not really a question, but I'll allow it.) Does it work outside of Solo? Does it have an `--ansi`
-        option? Is it writing to somewhere besides `STDOUT`? Is there an option to force it to write to `STDOUT`? If
-        you've tried all that, feel free to open an issue.
-    </dd>
-    <dt>Can I run Sail commands?</dt>
-    <dd>Yes! This seems to be the way to do it: `vendor/bin/sail artisan schedule:work --ansi` (Read more at #29.)
-    </dd>
-    <dt>Does Solo support Windows?</dt>
-    <dd>It does not, sorry. Solo relies on `ext-pcntl` and a few other Linux-y things, so Windows support is not on the
-        roadmap.
-    </dd>
-    <dt>Can I use this in production?</dt>
-    <dd>I wouldn't. I'd use something more robust, like supervisor or something.</dd>
-</dl>
+#### My command isn't working
+(That's not really a question, but I'll allow it.) Does it work outside of Solo? Does it have an `--ansi`
+option? Is it writing to somewhere besides `STDOUT`? Is there an option to force it to write to `STDOUT`? If
+you've tried all that, feel free to open an issue.
+    
+#### Can I run Sail commands?
+Yes! This seems to be the way to do it: `vendor/bin/sail artisan schedule:work --ansi` (Read more at #29.)
+   
+#### Does Solo support Windows?
+It does not, sorry. Solo relies on `ext-pcntl` and a few other Linux-y things, so Windows support is not on the
+roadmap.
+    
+#### Can I use this in production?
+I wouldn't. I'd use something more robust, like supervisor or something.
