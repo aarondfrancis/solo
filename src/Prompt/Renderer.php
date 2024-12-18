@@ -11,17 +11,18 @@ namespace AaronFrancis\Solo\Prompt;
 use AaronFrancis\Solo\Commands\Command;
 use AaronFrancis\Solo\Contracts\Theme;
 use AaronFrancis\Solo\Facades\Solo;
-use AaronFrancis\Solo\Helpers\AnsiAware;
+use AaronFrancis\Solo\Hotkeys\Hotkey;
+use AaronFrancis\Solo\Hotkeys\KeycodeMap;
+use AaronFrancis\Solo\Support\AnsiAware;
+use AaronFrancis\Solo\Support\Screen;
 use Chewie\Concerns\Aligns;
 use Chewie\Concerns\DrawsHotkeys;
 use Chewie\Output\Util;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
 use Laravel\Prompts\Themes\Default\Concerns\DrawsScrollbars;
 use Laravel\Prompts\Themes\Default\Concerns\InteractsWithStrings;
 use Laravel\Prompts\Themes\Default\Renderer as PromptsRenderer;
-
-use function Laravel\Prompts\info;
+use PHPUnit\Event\Runtime\PHP;
 
 class Renderer extends PromptsRenderer
 {
@@ -36,6 +37,8 @@ class Renderer extends PromptsRenderer
     public int $width;
 
     public int $height;
+
+    protected Collection $visibleContent;
 
     public function setup(Dashboard $dashboard): void
     {
@@ -55,6 +58,34 @@ class Renderer extends PromptsRenderer
         $this->renderContentPane();
         $this->renderHotkeys();
 
+
+        $screen = new Screen($this->width, $this->height);
+        $screen->write($this->output);
+        $screen->write("\e[H\e[2B");
+        $screen->write("\e[2C" . $this->visibleContent->implode(PHP_EOL . "\e[2C"));
+
+        $this->output = $screen->output();
+
+        return $this;
+
+        $screen = new Screen($this->width, $this->height);
+        $screen->write("\e[2m" . AnsiAware::plain($this->output));
+
+        $popup = "\e[H\e[10B";
+        $popup .= "\e[10C\e[0m ┌─────────────────────────┓ " . PHP_EOL;
+        $popup .= "\e[10C\e[0m │ This is a dialog        ┃ " . PHP_EOL;
+        $popup .= "\e[10C\e[0m ├─────────────────────────┫ " . PHP_EOL;
+        $popup .= "\e[10C\e[0m │  yo yo yo yo yo yoy yo  ┃ " . PHP_EOL;
+        $popup .= "\e[10C\e[0m │  yo yo yo yo yo yoy yo  ┃ " . PHP_EOL;
+        $popup .= "\e[10C\e[0m │  yo yo yo yo yo yoy yo  ┃ " . PHP_EOL;
+        $popup .= "\e[10C\e[0m └━━━━━━━━━━━━━━━━━━━━━━━━━┛ " . PHP_EOL;
+
+        $screen->write($popup);
+
+        $this->output = $screen->output();
+
+        dd($this->output);
+
         return $this;
     }
 
@@ -63,6 +94,13 @@ class Renderer extends PromptsRenderer
         // We're running the output right up to the edge,
         // so we can't afford phantom newlines.
         return rtrim($this->output, "\n");
+    }
+
+    protected function line(string $message): PromptsRenderer
+    {
+        $message = $this->pad($message, $this->width);
+
+        return parent::line($message);
     }
 
     protected function renderTabs(): void
@@ -186,6 +224,12 @@ class Renderer extends PromptsRenderer
         $start = $this->currentCommand->scrollIndex;
         $visible = $wrappedLines->slice($start, $allowedLines);
 
+        $this->visibleContent = $visible;
+
+        $visible = $visible->map(function ($line) {
+            return str_repeat(' ', mb_strlen(AnsiAware::plain($line), 'UTF-8'));
+        });
+
         // Add one since we're showing what lines they're viewing.
         // There's no such thing as a zeroth line.
         $this->renderBoxTop($start + 1, $start + $visible->count(), $wrappedLines->count());
@@ -193,7 +237,7 @@ class Renderer extends PromptsRenderer
         // Try to scroll the content, which may or may not have an
         // effect, depending on how much content there is.
         $scrolled = $this->scrollbar(
-            // Subtract 1 for the left box border and 1 for the space after it.
+        // Subtract 1 for the left box border and 1 for the space after it.
             $visible, $start, $allowedLines, $wrappedLines->count(), $this->width - 2
         );
 
@@ -207,14 +251,14 @@ class Renderer extends PromptsRenderer
             str($line)
                 // Remove the gray scrollbar and replace it with
                 // our own that matches the theme's box.
-                ->replaceLast($this->gray('│'), $this->theme->boxBorder($this->box('│')))
+                ->replaceLast($this->gray('│'), $this->reset($this->coloredBox('│')))
 
                 // Replace the handle with the user's preferred handle.
                 ->replaceLast($this->cyan('┃'), $this->theme->boxHandle())
 
                 // Only need to add the left side, because the
                 // right side is made up of the scrollbar.
-                ->prepend($this->theme->boxBorder($this->box('│') . ' '))
+                ->prepend($this->coloredBox('│') . ' ')
 
                 // Output
                 ->pipe($this->line(...));
@@ -222,7 +266,7 @@ class Renderer extends PromptsRenderer
 
         // Box bottom border
         $this->line(
-            $this->theme->boxBorder(
+            $this->colorBox(
                 $this->box('╰') . str_repeat($this->box('─'), $this->width - 2) . $this->box('╯')
             )
         );
@@ -235,51 +279,53 @@ class Renderer extends PromptsRenderer
             $start = 0;
         }
 
+        $interactive = $this->currentCommand->isInteractive() ? ' Interactive ' : '';
+
         $count = "Viewing [$start-$stop] of $total";
         $state = $this->currentCommand->paused ? '(Paused)' : '(Live)';
 
         $stateTreatment = $this->currentCommand->paused ? 'logsPaused' : 'logsLive';
 
         $border = ''
-            . $this->theme->boxBorder($this->box('╭'))
-            // 3 spaces + 3 border pieces = 6
-            . $this->theme->boxBorder(str_repeat($this->box('─'), $this->width - strlen($state) - strlen($count) - 6))
+            . $this->coloredBox('╭')
+            . $this->coloredBox('─')
+            . $this->bgCyan($interactive)
+            . $this->coloredBox('─')
+            . $this->colorBox(str_repeat($this->box('─'),
+                $this->width
+                // 5 hardcoded border pieces, 3 hardcoded spaces
+                - 5 - 3
+                - strlen($state) - strlen($count) - strlen($interactive)
+            ))
             . ' '
             . $this->theme->dim($count)
             . ' '
             . $this->theme->{$stateTreatment}($state)
             . ' '
-            . $this->theme->boxBorder($this->box('─'))
-            . $this->theme->boxBorder($this->box('╮'));
+            . $this->coloredBox('─')
+            . $this->coloredBox('╮');
 
         $this->line($border);
     }
 
     protected function renderHotkeys(): void
     {
-        $this->pinToBottom($this->height, function () {
-            $this->hotkey('←', 'Previous');
-            $this->hotkey('→', 'Next');
+        $localHotkeys = $this->currentCommand->allHotkeys();
 
-            $this->currentCommand->paused ? $this->hotkey('f', 'Follow') : $this->hotkey('p', 'Pause ');
+        if (count($localHotkeys)) {
+            $this->renderHotkeySubset($localHotkeys);
+        }
 
-            $this->hotkey('c', 'Clear');
+        $this->clearHotkeys();
 
-            $this->hotkey('s', $this->currentCommand->processRunning() ? 'Stop ' : 'Start');
+        $globalHotkeys = $this->currentCommand->isInteractive() ? [] : Solo::hotkeys();
 
-            $this->hotkey('r', 'Restart');
-
-            $this->hotkey('q', 'Quit');
-
-            $this->line(
-                $this->centerHorizontally($this->hotkeys(), $this->width)->first()
-            );
-        });
+        $this->renderHotkeySubset($globalHotkeys);
     }
 
     protected function box($part)
     {
-        $box = $this->theme->box();
+        $box = $this->currentCommand->isInteractive() ? $this->theme->boxInteractive() : $this->theme->box();
         // Example box
         // ╭─┬─╮
         // ├─┼─┤
@@ -287,7 +333,7 @@ class Renderer extends PromptsRenderer
         // ╰─┴─╯
 
         $lines = explode("\n", $box);
-        $lines = array_map(fn($line) => mb_str_split($line), $lines);
+        $lines = array_map(fn($line) => mb_str_split(trim($line)), $lines);
 
         return match ($part) {
             '╭' => $lines[0][0],
@@ -305,6 +351,18 @@ class Renderer extends PromptsRenderer
             '┴' => $lines[3][2],
             '╯' => $lines[3][4],
         };
+    }
+
+    protected function coloredBox($piece): string
+    {
+        return $this->colorBox($this->box($piece));
+    }
+
+    protected function colorBox($text): string
+    {
+        return $this->currentCommand->isInteractive()
+            ? $this->theme->boxBorderInteractive($text)
+            : $this->theme->boxBorder($text);
     }
 
     protected function padScrolledContent(Collection $scrolled, int $allowedLines): Collection
@@ -406,6 +464,22 @@ class Renderer extends PromptsRenderer
         }
 
         return [++$left, --$right];
+    }
+
+    protected function renderHotkeySubset(array $hotkeys): void
+    {
+        collect($hotkeys)->map(function (Hotkey $hotkey) {
+            $hotkey->init($this->currentCommand, $this->dashboard);
+
+            $key = is_array($hotkey->keys) ? $hotkey->keys[0] : $hotkey->keys;
+            $key = KeycodeMap::toDisplay($key);
+
+            $this->hotkey($key, $hotkey->makeLabel() ?? 'TODO');
+        });
+
+        $this->line(
+            $this->centerHorizontally($this->hotkeys(), $this->width)->first()
+        );
     }
 }
 

@@ -9,9 +9,13 @@
 namespace AaronFrancis\Solo\Commands;
 
 use AaronFrancis\Solo\Commands\Concerns\ManagesProcess;
-use AaronFrancis\Solo\Helpers\AnsiAware;
+use AaronFrancis\Solo\Hotkeys\Hotkey;
+use AaronFrancis\Solo\Hotkeys\KeyHandler;
+use AaronFrancis\Solo\Support\AnsiAware;
+use AaronFrancis\Solo\Support\Screen;
 use Chewie\Concerns\Ticks;
 use Chewie\Contracts\Loopable;
+use Chewie\Input\KeyPressListener;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -21,9 +25,17 @@ class Command implements Loopable
 {
     use ManagesProcess, Ticks;
 
+    public const MODE_PASSIVE = 1;
+
+    public const MODE_INTERACTIVE = 2;
+
+    public int $mode = Command::MODE_PASSIVE;
+
     public bool $focused = false;
 
     public bool $paused = false;
+
+    public bool $interactive = false;
 
     public int $scrollIndex = 0;
 
@@ -33,13 +45,15 @@ class Command implements Loopable
 
     public int $width = 0;
 
-    public function __construct(
-        public readonly string $name,
-        public readonly string $command,
-        public bool $autostart = true
-    ) {
-        $this->clear();
+    public Screen $screen;
 
+    public ?KeyPressListener $keyPressListener = null;
+
+    public function __construct(
+        public ?string $name = null,
+        public ?string $command = null,
+        public bool $autostart = true,
+    ) {
         $this->boot();
     }
 
@@ -53,10 +67,42 @@ class Command implements Loopable
         //
     }
 
+    public function allHotkeys(): array
+    {
+        // In interactive mode, the only hotkey that works is
+        // Ctrl+X, to exit interactive mode. Everything else
+        // gets proxied to the underlying process.
+        if ($this->isInteractive()) {
+            return [
+                Hotkey::make("\x18", fn() => null)->label('Exit interactive mode')
+            ];
+        }
+
+        $hotkeys = $this->hotkeys();
+
+        if ($this->canBeInteractive()) {
+            $hotkeys['interactive'] = Hotkey::make('i', KeyHandler::Interactive)->label('Interactive mode');
+        }
+
+        return array_filter($hotkeys);
+    }
+
+    /**
+     * @return array<string, Hotkey>
+     */
+    public function hotkeys(): array
+    {
+        return [
+            //
+        ];
+    }
+
     public function setDimensions($width, $height): static
     {
         $this->width = $width;
         $this->height = $height;
+
+        $this->screen = $this->makeNewScreen();
 
         return $this;
     }
@@ -68,13 +114,18 @@ class Command implements Loopable
         return $this;
     }
 
+    public function interactive(): static
+    {
+        $this->interactive = true;
+
+        return $this;
+    }
+
     public function onTick(): void
     {
-        $this->marshalRogueProcess();
+        $this->collectIncrementalOutput();
 
-        $this->onNthTick(
-            $this->focused ? 1 : 10, [$this, 'gatherLatestOutput']
-        );
+        $this->marshalProcess();
     }
 
     public function isFocused(): bool
@@ -87,6 +138,16 @@ class Command implements Loopable
         return !$this->isFocused();
     }
 
+    public function canBeInteractive(): bool
+    {
+        return $this->interactive;
+    }
+
+    public function isInteractive(): bool
+    {
+        return $this->mode === self::MODE_INTERACTIVE;
+    }
+
     /*
     |--------------------------------------------------------------------------
     | Actions
@@ -94,44 +155,37 @@ class Command implements Loopable
     */
     public function dd()
     {
-        dd(iterator_to_array($this->lines));
+        $this->wrappedLines()->map(fn($line) => AnsiAware::plain($line))->dd();
     }
 
     public function addOutput($text)
     {
-        $line = $this->lines->isEmpty() ? '' : $this->lines->pop();
-
-        $line .= $text;
-
-        $newLines = explode(PHP_EOL, $line);
-
-        foreach ($newLines as $line) {
-            $this->lines->enqueue($line);
-        }
-
-        // Enforce a strict 2000 line limit, which
-        // seems like more than enough.
-        if ($this->lines->count() > 2000) {
-            $this->lines->dequeue();
-        }
+        $this->screen->write($text);
     }
 
     public function addLine($line)
     {
-        $last = $this->lines->isEmpty() ? '' : $this->lines->top();
+        $this->screen->writeln($line);
+    }
 
-        if ($last !== '') {
-            $line = Str::start($line, "\n");
+    public function setMode(int $mode): bool
+    {
+        if (!$this->interactive) {
+            $mode = static::MODE_PASSIVE;
         }
 
-        $this->addOutput(Str::finish($line, "\n"));
+        if ($this->mode === $mode) {
+            return false;
+        }
+
+        $this->mode = $mode;
+
+        return true;
     }
 
     public function focus(): void
     {
         $this->focused = true;
-
-        $this->gatherLatestOutput();
     }
 
     public function blur(): void
@@ -151,33 +205,46 @@ class Command implements Loopable
 
     public function clear(): void
     {
-        $this->lines = new SplQueue;
+        $this->screen = $this->makeNewScreen();
     }
 
     public function catchUpScroll(): void
     {
         if (!$this->paused) {
-            $this->scrollDown($this->lines->count());
+            $this->scrollDown(INF);
             // `scrollDown` pauses, so turn follow back on.
             $this->follow();
         }
     }
 
+    public function scrollTo($index): void
+    {
+        $this->scrollIndex = max(0, min(
+            $index,
+            $this->wrappedLines()->count() - $this->scrollPaneHeight()
+        ));
+    }
+
     public function scrollDown($amount = 1): void
     {
         $this->paused = true;
-        $this->scrollIndex = max(0, min(
-            $this->scrollIndex + $amount,
-            $this->wrappedLines()->count() - $this->scrollPaneHeight()
-        ));
+        $this->scrollTo($this->scrollIndex + $amount);
+    }
+
+    public function pageDown()
+    {
+        $this->scrollDown($this->scrollPaneHeight() - 1);
     }
 
     public function scrollUp($amount = 1): void
     {
         $this->paused = true;
-        $this->scrollIndex = max(
-            $this->scrollIndex - $amount, 0
-        );
+        $this->scrollTo($this->scrollIndex - $amount);
+    }
+
+    public function pageUp()
+    {
+        $this->scrollUp($this->scrollPaneHeight() - 1);
     }
 
     /*
@@ -187,8 +254,11 @@ class Command implements Loopable
     */
     public function scrollPaneHeight(): int
     {
-        // 5 = 1 tabs + 1 process + 1 top border + 1 bottom border + 1 hotkeys
-        return $this->height - 5;
+        // Local hotkeys
+        $hotkeys = (count($this->allHotkeys()) || $this->canBeInteractive()) ? 1 : 0;
+
+        // 5 = 1 tabs + 1 process + 1 top border + 1 bottom border + 1 global hotkeys
+        return $this->height - 5 - $hotkeys;
     }
 
     public function scrollPaneWidth(): int
@@ -199,20 +269,17 @@ class Command implements Loopable
 
     public function wrappedLines(): Collection
     {
-        return collect($this->lines)
-            ->flatMap(function ($line) {
-                return Arr::wrap($this->wrapAndFormat($line));
-            })
-            ->pipe(fn(Collection $lines) => $this->modifyWrappedLines($lines))
-            ->values();
+        $lines = explode(PHP_EOL, $this->screen->output());
+
+        return $this->modifyWrappedLines(collect($lines))->values();
     }
 
-    protected function wrapAndFormat($line): string|array
+    protected function makeNewScreen()
     {
-        return $this->wrapLine($line);
+        return new Screen($this->scrollPaneWidth(), $this->scrollPaneHeight());
     }
 
-    protected function wrapLine($line, $width = null): array
+    public function wrapLine($line, $width = null, $continuationIndent = 0): array
     {
         $defaultWidth = $this->scrollPaneWidth();
 
@@ -224,18 +291,36 @@ class Command implements Loopable
             $width = $defaultWidth;
         }
 
-        // A bit experimental, but seems to work.
-        return explode(PHP_EOL, AnsiAware::wordwrap(
+        $exploded = explode(PHP_EOL, AnsiAware::wordwrap(
             string: $line,
             width: $width,
             cut: true
         ));
 
-        return explode(PHP_EOL, wordwrap(
-            string: $line,
-            width: $width,
-            cut_long_words: true
-        ));
+        if ($continuationIndent === 0 || count($exploded) === 1) {
+            return $exploded;
+        }
+
+        $first = array_shift($exploded);
+        $indent = str_repeat(' ', $continuationIndent);
+
+        if ($continuationIndent) {
+            $allIndented = true;
+            foreach ($exploded as $continuationLine) {
+                $allIndented = $allIndented && str_starts_with($continuationLine, $indent);
+            }
+
+            if ($allIndented) {
+                return [$first, ...$exploded];
+            }
+        }
+
+        $rest = $indent . implode(PHP_EOL, $exploded);
+
+        return [
+            $first,
+            ...$this->wrapLine($rest, $width, $continuationIndent)
+        ];
     }
 
     protected function modifyWrappedLines(Collection $lines): Collection

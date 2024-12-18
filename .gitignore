@@ -1,3 +1,4 @@
+artisan
 .idea
 .phpunit.result.cache
 build
@@ -7,6 +8,7 @@ phpunit.xml
 phpstan.neon
 vendor
 node_modules
+tests/Screenshots
 
 docs/*.blade.php
 docs/**/*.blade.php

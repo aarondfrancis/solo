@@ -57,7 +57,11 @@ interface Theme
     */
     public function box(): string;
 
+    public function boxInteractive(): string;
+
     public function boxBorder(string $text): string;
+
+    public function boxBorderInteractive(string $text): string;
 
     public function boxHandle(): string;
 }

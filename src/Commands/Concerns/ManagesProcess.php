@@ -8,12 +8,16 @@
 
 namespace AaronFrancis\Solo\Commands\Concerns;
 
+use AaronFrancis\Solo\Support\PendingProcess;
 use AaronFrancis\Solo\Support\ProcessTracker;
 use Closure;
 use Illuminate\Process\InvokedProcess;
-use Illuminate\Process\PendingProcess;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Process;
+use Log;
+use ReflectionClass;
+use Symfony\Component\Process\InputStream;
+use Symfony\Component\Process\Process as SymfonyProcess;
 
 trait ManagesProcess
 {
@@ -27,12 +31,30 @@ trait ManagesProcess
 
     protected ?Closure $processModifier = null;
 
+    public InputStream $input;
+
+    protected string $partialBuffer = '';
+
     protected $children = [];
 
     public function createPendingProcess(): PendingProcess
     {
-        $parts = explode(' ', $this->command);
-        $process = Process::command($parts)->forever();
+        $this->input ??= new InputStream;
+
+        $command = explode(' ', $this->command);
+
+        // We have to make our own so that we can control pty.
+        $process = app(PendingProcess::class)
+            ->command($command)
+            ->forever()
+            ->timeout(0)
+            ->idleTimeout(0)
+            // Regardless of whether or not it's an interactive process, we're
+            // still going to register an input stream. This lets command-
+            //specific hotkeys potentially send input even without
+            // entering interactive mode.
+            ->pty()
+            ->input($this->input);
 
         if ($this->processModifier) {
             call_user_func($this->processModifier, $process);
@@ -46,6 +68,13 @@ trait ManagesProcess
             'LINES' => $this->scrollPaneHeight(),
             ...$process->environment
         ]);
+    }
+
+    public function sendInput(mixed $input)
+    {
+        if (!$this->input->isClosed()) {
+            $this->input->write($input);
+        }
     }
 
     public function withProcess(Closure $cb)
@@ -66,13 +95,40 @@ trait ManagesProcess
 
     public function start(): void
     {
-        $this->process = $this->createPendingProcess()->start();
+        $this->process = $this->createPendingProcess()->start(null, function ($type, $buffer) {
+            // After many, many hours of frustration I've figured out that for some reason the max
+            // number of bytes that come through at any time is 1024. I think it has to do with
+            // stdio buffering (https://www.pixelbeat.org/programming/stdio_buffering).
+
+            // According to that article, it could be 1024 or 4096, depending on whether a terminal
+            // is connected or not. We'll check both. If there are more than 1024 bytes in
+            // stdout, they might end up in stderr! No idea why. Not sure if that's
+            // Symfony or just normal system stuff. Regardless, for that reason
+            // we don't differentiate between stdout and stderr here.
+
+            // So when we do get a chunk that seems like it might have a continuation, we need to
+            // buffer it, because there's more output coming right behind it. If we don't
+            // buffer, we could splice a multibyte character or an ANSI code. Much
+            // effort went into fixing byte splices, but ANSI splices are way
+            // tougher. This 1024/4096 method seems to be foolproof.
+            if (strlen($buffer) === 1024 || strlen($buffer) === 4096) {
+                $this->partialBuffer .= $buffer;
+                return;
+            }
+
+            $this->addOutput($this->partialBuffer . $buffer);
+            $this->partialBuffer = '';
+
+            // 5% chance of clearing the buffer. Hopefully this helps save memory.
+            // @link https://github.com/aarondfrancis/solo/issues/33
+            if (rand(1, 100) < 5) {
+                $type === SymfonyProcess::OUT ? $this->clearStdOut() : $this->clearStdErr();
+            }
+        });
     }
 
     public function stop(): void
     {
-        $this->addLine('Stopping process...');
-
         $this->stopping = true;
 
         if ($this->processRunning()) {
@@ -118,7 +174,34 @@ trait ManagesProcess
         return !$this->processRunning();
     }
 
-    protected function marshalRogueProcess(): void
+    protected function clearStdOut()
+    {
+        $this->callPrivateMethodOnSymfonyProcess('clearOutput');
+    }
+
+    protected function clearStdErr()
+    {
+        $this->callPrivateMethodOnSymfonyProcess('clearErrorOutput');
+    }
+
+    protected function callPrivateMethodOnSymfonyProcess($method, array $args = []): mixed
+    {
+        return $this->withSymfonyProcess(function (SymfonyProcess $process) use ($method, $args) {
+            return (new ReflectionClass(SymfonyProcess::class))->getMethod($method)->invoke($process, ...$args);
+        });
+    }
+
+    protected function withSymfonyProcess(Closure $callback)
+    {
+        /** @var SymfonyProcess $process */
+        $process = (new ReflectionClass(InvokedProcess::class))
+            ->getProperty('process')
+            ->getValue($this->process);
+
+        return $callback($process);
+    }
+
+    protected function marshalProcess(): void
     {
         // If we're trying to stop and the process isn't running, then we
         // succeeded. We'll reset some state and call the callbacks.
@@ -129,6 +212,7 @@ trait ManagesProcess
             ProcessTracker::kill($this->children);
 
             $this->addLine('Stopped.');
+
             $this->callAfterTerminateCallbacks();
 
             return;
@@ -152,7 +236,6 @@ trait ManagesProcess
         if ($this->processRunning()) {
             $this->addLine('Force killing!');
 
-            // @TODO clean up orphans? Looking at you, pail
             $this->process->signal(SIGKILL);
         }
     }
@@ -170,12 +253,12 @@ trait ManagesProcess
         $this->afterTerminateCallbacks = [];
     }
 
-    protected function gatherLatestOutput(): void
+    protected function collectIncrementalOutput()
     {
-        if (!$latest = $this->process?->latestOutput()) {
-            return;
-        }
-
-        $this->addOutput($latest);
+        // A bit of a hack, but there's no other way in. Process is a Laravel InvokedProcess.
+        // Calling `running` on it defers to the Symfony process `isRunning` method. That
+        // method calls a protected method `updateStatus` which calls a private method
+        // `readPipes` which invokes the output callback, adding it to our buffer.
+        $this->process->running();
     }
 }

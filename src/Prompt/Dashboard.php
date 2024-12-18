@@ -10,6 +10,7 @@ namespace AaronFrancis\Solo\Prompt;
 
 use AaronFrancis\Solo\Commands\Command;
 use AaronFrancis\Solo\Facades\Solo;
+use AaronFrancis\Solo\Hotkeys\Hotkey;
 use AaronFrancis\Solo\Support\Frames;
 use Carbon\CarbonImmutable;
 use Chewie\Concerns\CreatesAnAltScreen;
@@ -34,11 +35,15 @@ class Dashboard extends Prompt
 
     public int $selectedCommand = 0;
 
+    public ?int $lastSelectedCommand = null;
+
     public int $width;
 
     public int $height;
 
     public Frames $frames;
+
+    public KeyPressListener $listener;
 
     public static function start(): void
     {
@@ -49,6 +54,8 @@ class Dashboard extends Prompt
     {
         $this->registerRenderer(Solo::getRenderer());
         $this->createAltScreen();
+
+        $this->listener = KeyPressListener::for($this);
 
         [$this->width, $this->height] = $this->getDimensions();
 
@@ -105,7 +112,6 @@ class Dashboard extends Prompt
         putenv('COLUMNS=' . $terminal->cols());
         putenv('LINES=' . $terminal->lines());
 
-        // Get our buffered dimensions.
         [$width, $height] = $this->getDimensions();
 
         if ($width !== $this->width || $height !== $this->height) {
@@ -118,51 +124,113 @@ class Dashboard extends Prompt
         return false;
     }
 
+    public function rebindHotkeys()
+    {
+        $this->listener->clearExisting();
+
+        collect(Solo::hotkeys())
+            ->merge($this->currentCommand()->allHotkeys())
+            ->each(function (Hotkey $hotkey) {
+                $hotkey->init($this->currentCommand(), $this);
+                $this->listener->on($hotkey->keys, $hotkey->handle(...));
+            });
+    }
+
+    public function enterInteractiveMode()
+    {
+        if ($this->currentCommand()->processStopped()) {
+            $this->currentCommand()->restart();
+        }
+
+        $this->currentCommand()->setMode(Command::MODE_INTERACTIVE);
+    }
+
+    public function exitInteractiveMode()
+    {
+        $this->currentCommand()->setMode(Command::MODE_PASSIVE);
+    }
+
+    public function nextTab()
+    {
+        $this->currentCommand()->blur();
+        $this->selectedCommand = ($this->selectedCommand + 1) % count($this->commands);
+        $this->currentCommand()->focus();
+    }
+
+    public function previousTab()
+    {
+        $this->currentCommand()->blur();
+        $this->selectedCommand = ($this->selectedCommand - 1 + count($this->commands)) % count($this->commands);
+        $this->currentCommand()->focus();
+    }
+
     protected function showDashboard(): void
     {
-        $listener = KeyPressListener::for($this)
-            ->on('D', fn() => $this->currentCommand()->dd())
-            // Logs
-            ->on('c', fn() => $this->currentCommand()->clear())
-            ->on('p', fn() => $this->currentCommand()->pause())
-            ->on('f', fn() => $this->currentCommand()->follow())
-            ->on('r', fn() => $this->currentCommand()->restart())
+        $this->currentCommand()->focus($this);
 
-            // Scrolling
-            ->onDown(fn() => $this->currentCommand()->scrollDown())
-            ->on(Key::SHIFT_DOWN, fn() => $this->currentCommand()->scrollDown(10))
-            ->onUp(fn() => $this->currentCommand()->scrollUp())
-            ->on(Key::SHIFT_UP, fn() => $this->currentCommand()->scrollUp(10))
+        $this->loop($this->renderSingleFrame(...), 25_000);
+    }
 
-            // Processes
-            ->on('s', fn() => $this->currentCommand()->toggle())
-            ->onLeft(function () {
-                $this->currentCommand()->blur();
+    protected function renderSingleFrame()
+    {
+        if ($this->lastSelectedCommand !== $this->selectedCommand) {
+            $this->lastSelectedCommand = $this->selectedCommand;
+            $this->rebindHotkeys();
+        }
 
-                $this->selectedCommand = ($this->selectedCommand - 1 + count($this->commands)) % count($this->commands);
+        $this->currentCommand()->catchUpScroll();
 
-                $this->currentCommand()->focus();
-            })
-            ->onRight(function () {
-                $this->currentCommand()->blur();
+        $this->render();
 
-                $this->selectedCommand = ($this->selectedCommand + 1) % count($this->commands);
+        $this->currentCommand()->isInteractive() ? $this->handleInteractiveInput() : $this->listener->once();
 
-                $this->currentCommand()->focus();
-            })
+        $this->frames->next();
+    }
 
-            // Quit
-            ->on(['q', Key::CTRL_C], fn() => $this->quit());
+    protected function render(): void
+    {
+        // This is basically what the parent `render` function does, but we can make a
+        // few improvements given our unique setup. In Solo, we guarantee that the
+        // entire screen is going to be written with characters, including spaces
+        // padded all the way to the width of the terminal. Since that's the case,
+        // we can merely move the cursor up and to (1,1) and rewrite everything.
+        // Since much of the screen stays the same, it just overwrite in place.
+        // But the good news is, because we never cleared we don't get any flicker.
+        $frame = $this->renderTheme();
 
-        $this->currentCommand()->focus();
+        if ($frame !== $this->prevFrame) {
+            static::writeDirectly("\e[{$this->height}F");
+            $this->output()->write($frame);
 
-        $this->loop(fn() => $this->loopCallback($listener), 25_000);
+            $this->prevFrame = $frame;
+        }
+    }
 
-        // @TODO reconsider using?
-        // $this->loopWithListener($listener, function () {
-        //     $this->currentCommand()->catchUpScroll();
-        //     $this->render();
-        // });
+    protected function handleInteractiveInput()
+    {
+        $read = [STDIN];
+        $write = null;
+        $except = null;
+
+        if ($this->currentCommand()->processStopped()) {
+            $this->exitInteractiveMode();
+
+            return;
+        }
+
+        // Shorten the wait time since we're expecting keystrokes.
+        if (stream_select($read, $write, $except, 0, 5_000) === 1) {
+            $key = fread(STDIN, 10);
+
+            // Exit interactive mode without stopping the underlying process.
+            if ($key === "\x18") {
+                $this->exitInteractiveMode();
+
+                return;
+            }
+
+            $this->currentCommand()->sendInput($key);
+        }
     }
 
     public function loopCallback(?KeyPressListener $listener = null)
