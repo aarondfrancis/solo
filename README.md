@@ -93,6 +93,7 @@ class SoloServiceProvider extends ServiceProvider
                 'Queue' => 'php artisan queue:listen --tries=1',
                 // 'Reverb' => 'php artisan reverb:start',
                 // 'Pint' => 'pint --ansi',
+                // 'Tests' => 'php artisan test --colors=always',
             ])
             // FQCNs of trusted classes that can add commands.
             ->allowCommandsAddedFrom([
