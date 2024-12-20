@@ -92,7 +92,7 @@ class SoloServiceProvider extends ServiceProvider
             ->addLazyCommands([
                 'Queue' => 'php artisan queue:listen --tries=1',
                 // 'Reverb' => 'php artisan reverb:start',
-                // 'Pint' => 'pint --ansi',
+                // 'Pint' => '/vendor/bin/pint --ansi',
             ])
             // FQCNs of trusted classes that can add commands.
             ->allowCommandsAddedFrom([
