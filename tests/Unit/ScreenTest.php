@@ -626,8 +626,41 @@ TXT;
     #[Test]
     public function the_daniel_weaver_test_bless_you_daniel()
     {
-        $line = str_repeat('a', 128);
+        $width = $this->makeIdenticalScreen()->width;
+        $line = str_repeat('a', $width);
 
         $this->assertTerminalMatch($line . '0');
+
+    }
+
+    #[Test]
+    public function cursor_home_both()
+    {
+        $this->assertTerminalMatch("\e[H\e[2J-----------\e[19;8Hhey there");
+    }
+
+    #[Test]
+    public function cursor_home_col_only()
+    {
+        $this->assertTerminalMatch("\e[H\e[2J-----------\e[;8Hhey there");
+    }
+
+    #[Test]
+    public function cursor_home_row_only()
+    {
+        $this->assertTerminalMatch("\e[H\e[2J-----------\e[19;Hhey there");
+    }
+
+    #[Test]
+    public function cursor_home_semicolon_only()
+    {
+        $this->assertTerminalMatch("\e[H\e[2J-----------\e[;Hhey there");
+    }
+
+    #[Test]
+    public function cursor_home_no_params()
+    {
+        $this->assertTerminalMatch("\e[H\e[2J-----------\e[Hhey there");
+
     }
 }
